@@ -1,0 +1,382 @@
+---
+title: "Analiza próbek krwi pacjentów chorych na COVID-19"
+author: "Stanisław Szataniak"
+date: "29 06 2021"
+output: html_document
+---
+
+## Podsumowanie
+
+Poniższy raport prezentuje wyniki analizy przeprowadzonej na danych zebranych między 10. stycznia a 18. lutego 2020 roku, dotyczących badań krwi pacjentów przyjętych do szpitala Tongji w Wuhan (Chiny). 
+Pierwszym krokiem analizy było wstępne przetworzenie danych, m.in. uzupełnienie brakujących wartości oraz zmiana nazw kolumn. Następnie zbadane zostały zależności pomiędzy wybranymi atrybutami. Kolejnym etapem analizy było sprawdzenie korelacji między zmiennymi i  jej wizualizacja. Ostatnim krokiem analizy było stworzenie klasyfikatora przewidującego czy dany pacjent przeżyje. W wyniku analizy udało się potwierdzić, że zarówno wiek jak i liczba neutrofili znacznie wpływają na śmiertelność pacjentów, a także, że po okresie 14 dni większość chorych osób zdrowieje. Udało się również stworzyć klasyfikator o precyzji na poziomie 87%. 
+
+Poniżej zostały przedstawione główne punkty raportu:
+
+1. [Przygotowanie środowiska](#przygotowanie-środowiska)
+2. [Przygotowanie danych](#przygotowanie-danych)
+3. [Przegląd danych](#przegląd-danych)
+4. [Klasyfikacja](#klasyfikacja)
+
+## Przygotowanie środowiska
+
+### Wykorzystane biblioteki
+```{r libraries, message=FALSE}
+library(caret)
+library(corrr)
+library(corrplot)
+library(dplyr)
+library(plyr)
+library(readxl)
+library(tidyr)
+library(imputeTS)
+library(ggplot2)
+library(plotly)
+library(lares)
+```
+
+### Zapewnienie powtarzalności
+```{r setup, message=FALSE}
+set.seed(529)
+```
+
+## Przygotowanie danych
+
+Poniżej przedstawiono kod odpowiedzialny za oczyszczenie danych, podsumowujący rozmiar zbioru, a także pokazujący podstawowe statystyki dla wczytanych danych. 
+W ramach oczyszczenia danych wykonano następujące działania:
+
+- zamiana wielkich liter na małe
+- zastąpienie spacji znakiem `_`
+- zastąpienie greckich liter ich nazwami (alpha, beta)
+- uzupełnienie id pacjentów
+- zastąpienie nieczytelnych wartości liczbowych wartościami nominalnymi (np. płeć)
+- uzupełnienie brakujących wartości atrybutów - brakujące wartości są kopiowane z poprzedniego wiersza
+
+### Wczytanie danych z pliku
+
+```{r read_data, message=FALSE}
+df <- read_excel('wuhan_blood_sample_data_Jan_Feb_2020.xlsx')
+```
+
+### Rozmiar zbioru
+
+Zbiór danych składa się z `r nrow(df)` wierszy opisywanych przez `r ncol(df)` atrybutów. Większość ze zmiennych dotyczy pomiarów medycznych, jednak
+znajdują się też między nimi zmienne mówiące o płci i wieku pacjentów, a także czasie hospitalizacji i ostatecznym rezultacie (śmierć lub przeżycie choroby). 
+
+### Wstępne przetworzenie danych
+
+```{r clean_data, message=FALSE}
+rename_all <- function(df, fun){ setNames(df, fun(names(df))) }
+df_1 <- df %>% 
+  rename_all(. %>% tolower %>% gsub(" ", "_", .)) %>%
+  rename(interleukin_beta=interleukin_1β) %>%
+  fill(patient_id) %>%
+  mutate(gender = ifelse(gender == 2, "female", "male")) %>%
+  mutate(stay =  as.numeric(as.Date(discharge_time) - as.Date(admission_time)), .after="patient_id")
+
+df <- df_1 %>% 
+  rename(discharged=outcome) %>%
+  mutate(discharged = ifelse(discharged == 0, "yes", "no"))
+```
+
+### Podsumowanie danych
+
+Poniżej przedstawiono podstawowe statystyki dotyczące zbioru, m.in.:
+
+- wartość minimalna
+- wartość maksymalna
+- średnia
+- mediana
+- liczba wartości pustych
+
+Najważniejszą informacją widoczną w podsumowaniu jest dominująca liczba brakujących wartości. Ważnym elementem analizy było zdecydowanie w jaki sposób je zastąpić. 
+
+```{r summary, message=FALSE}
+df_summary <- df %>%
+  select(c(9:19))
+
+summary(df_summary)
+```
+
+
+### Uzupełnienie brakujących wartości
+
+Brakujące wartości zostały uzupełnione następująco: na początku brakujące wartości są kopiowane z ostatniego poprzedzającego i niepustego wiersza, a następnie, jeśli początkowe wiersze były puste, uzupełniane są wartością z pierwszego niepustego wiersza. Jeśli dla danego pacjenta nie został wykonany żaden pomiar, to wszystkie wartości atrybutu pozostają puste. 
+
+```{r fill_na, message=FALSE}
+df <- df %>%
+  group_by(patient_id) %>%
+  fill(names(df), .direction = 'downup')
+```
+
+## Przegląd danych
+
+W poniższej sekcji przedstawione zostały proste zależności między wybranymi atrybutami. Na potrzeby grupowania wybrane zostały ostatnie zarejestrowane wartości zmiennych. 
+
+```{r plot_data, warning=FALSE, echo=FALSE, message=FALSE}
+plot_data <- df %>%
+  select(patient_id, gender, age, admission_time, discharge_time, discharged, stay, hemoglobin, glucose, neutrophils_count) %>%
+  group_by(patient_id) %>%
+  summarise(across(everything(), last))
+```
+
+### Liczba pacjentów z podziałem na płeć
+
+Pierwszą sprawdzaną zależnością była liczba pacjentów z podziałem na płeć. Zbadano prawie 20% więcej mężczyzn niż kobiet. 
+
+```{r patients_by_gender, warning=FALSE, echo=FALSE, message=FALSE}
+patients_by_gender <- plot_data %>%
+  group_by(gender) %>%
+  summarise(count = n())
+
+patients_by_gender_plot <- ggplot(patients_by_gender, aes(x = gender, y = count, fill = gender)) + 
+  geom_bar(stat="identity", position="identity") +
+  theme_classic()
+ggplotly(patients_by_gender_plot)
+```
+
+### Liczba pacjentów z podziałem na płeć i grupy wiekowe
+
+W badanym okresie zbadano więcej mężczyzn niż kobiet prawie z każdej grupy wiekowej. Jedynie w grupach wiekowych 25-35 i 35-45 znajdowało się więcej kobiet. 
+
+```{r patients_by_age, warning=FALSE, echo=FALSE, message=FALSE}
+patients_by_age_plot <- ggplot(plot_data, aes(x = age, fill = gender)) + 
+  geom_histogram(color="black", binwidth = 10, alpha = 0.8, position = "identity") +
+  scale_x_continuous(breaks = seq(10, 100, 10)) +
+  theme_classic()
+ggplotly(patients_by_age_plot)
+```
+
+### Śmiertelność z podziałem na płeć
+
+Ostatecznie większa część kobiet przeżyła chorobę. Jest to ściśle związane z informacjami zawartymi na poprzednim wykresie. Jak wiadomo - młodsze osoby mają znacznie większe szanse na przeżycie kontaktu z wirusem. 
+
+```{r mortality_by_gender, warning=FALSE, echo=FALSE, message=FALSE}
+mortality_by_gender <- plot_data %>%
+  group_by(gender, discharged) %>%
+  summarise(count = n())
+  
+mortality_by_gender_plot <-  ggplot(mortality_by_gender, aes(x = discharged, y = count, fill = discharged)) + 
+  geom_bar(stat="identity")+
+  facet_wrap(~gender) +
+  theme_classic()
+ggplotly(mortality_by_gender_plot)
+```
+
+### Śmiertelność z podziałem na płeć i grupę wiekową
+
+Na poniższym wykresie przedstawiono śmiertelność w zależności od płci i wieku pacjenta. Można zaobserwować, że wraz z wiekiem rosła śmiertelność pacjentów. 
+
+```{r mortality_by_age_and_gender, warning=FALSE, echo=FALSE, message=FALSE}
+mortality_by_age_and_gender <- plot_data %>%
+  filter(discharged == "no")
+
+mortality_by_age_and_gender_plot <- ggplot(mortality_by_age_and_gender, aes(x=age, fill=gender)) + 
+  geom_histogram(color="black", binwidth = 10, alpha = 0.8, position = "identity") +
+  scale_x_continuous(breaks = seq(10, 100, 10)) +
+  theme_classic()
+
+ggplotly(mortality_by_age_and_gender_plot)
+```
+
+### Prawdopodobieństwo śmierci w zależności od wieku
+
+Poniższy wykres to uzupełnienie powyższego. Bardzo widoczny jest na nim wzrost śmiertelności wraz z wiekiem pacjentów. 
+
+```{r mortality_prob, warning=FALSE, echo=FALSE, message=FALSE}
+age_all <- plot_data %>%
+  mutate(age_group = cut(age, seq(15, 95, 10))) %>%
+  group_by(age_group) %>%
+  summarise(count_all = n())
+
+age_dead <- plot_data %>%
+  filter(discharged == "no") %>%
+  mutate(age_group = cut(age, seq(15, 95, 10))) %>%
+  group_by(age_group) %>%
+  summarise(count_dead = n())
+
+age_prob <- left_join(age_all, age_dead, by = "age_group") %>%
+  mutate(probability = count_dead / count_all)
+  
+age_prob$age_group <- (as.numeric(age_prob$age_group) + 1) * 10
+
+age_prob_plot <-ggplot(age_prob, aes(x=age_group, y=probability)) +
+  geom_line() +
+  theme_classic()
+
+ggplotly(age_prob_plot)
+
+```
+
+### Śmiertelność ze względu na czas spędzony w szpitalu
+
+Śmiertelność malała im dłużej pacjent przebywał w szpitalu. Można zaobserwować, że w okolicach 14 dnia, czyli czasu potrzebnego na przebycie choroby, śmiertelność spadała prawie do zera. 
+
+```{r mortality_by_stay, warning=FALSE, echo=FALSE, message=FALSE}
+mortality_by_stay <- plot_data %>%
+  filter(discharged == "no") %>%
+  group_by(gender, stay) %>%
+  summarise(count = n())
+
+mortality_by_stay_plot <-ggplot(mortality_by_stay, aes(x=stay, y = count, groups = gender, colour = gender)) + 
+  geom_line() +
+  theme_classic()
+ggplotly(mortality_by_stay_plot)
+```
+
+### Śmiertelność ze względu na wybrane biomarkery
+
+Do analizy wybrane zostały trzy biomarkery, których wysoka wartość w innych artykułach poświęconych wirusowi COVID-19 mówiła o podwyższonym ryzyku śmierci.
+Wybrane atrybuty to:
+
+- hemoglobina
+- glukoza
+- liczba neutrofili
+
+Na wykresach można zaobserwować, że wysoka wartość tych biomarkerów wiązała się z wyższą śmiertelnością. 
+
+```{r mortality_by_hemoglobin, warning=FALSE, echo=FALSE, message=FALSE}
+mortality_by_hemoglobin_plot <-ggplot(plot_data, aes(x=hemoglobin, fill = gender)) + 
+  geom_histogram(color="black", binwidth = 10, alpha = 0.8, position = "identity") +
+  facet_wrap(~discharged, labeller = as_labeller(c(`yes` = "survived", `no` = "died"))) +
+  theme_classic()
+
+g <- ggplotly(mortality_by_hemoglobin_plot)
+g[['x']][['layout']][['annotations']][[1]][['y']] <- -0.05
+g[['x']][['layout']][['annotations']][[2]][['x']] <- -0.05
+g %>% layout()
+```
+
+```{r mortality_by_glucose, warning=FALSE, echo=FALSE, message=FALSE}
+mortality_by_glucose_plot <-ggplot(plot_data, aes(x=glucose, fill = gender)) + 
+  geom_histogram(color="black", binwidth = 3, alpha = 0.8, position = "identity") +
+  facet_wrap(~discharged, labeller = as_labeller(c(`yes` = "survived", `no` = "died"))) +
+  theme_classic()
+
+g <- ggplotly(mortality_by_glucose_plot)
+g[['x']][['layout']][['annotations']][[1]][['y']] <- -0.05
+g[['x']][['layout']][['annotations']][[2]][['x']] <- -0.05
+g %>% layout()
+```
+
+```{r mortality_by_netrophils, warning=FALSE, echo=FALSE, message=FALSE}
+mortality_by_netrophils_plot <-ggplot(plot_data, aes(x=neutrophils_count, fill = gender)) + 
+  geom_histogram(color="black", binwidth = 3, alpha = 0.8, position = "identity") +
+  facet_wrap(~discharged, labeller = as_labeller(c(`yes` = "survived", `no` = "died"))) +
+  theme_classic()
+g <- ggplotly(mortality_by_netrophils_plot)
+g[['x']][['layout']][['annotations']][[1]][['y']] <- -0.05
+g[['x']][['layout']][['annotations']][[2]][['x']] <- -0.05
+g %>% layout()
+```
+
+### Zmiany liczby pacjentów w czasie
+
+Na poniższym wykresie pokazano jak zmieniała się liczba pacjentów w czasie. Można zaobserwować, że najwięcej pacjentów było badanych do połowy lutego, następnie liczba ta zmniejszała się, ponieważ nie badano już żadnych nowych pacjentów. 
+
+```{r patients_over_time, warning=FALSE, echo=FALSE, message=FALSE}
+patients_over_time <- plot_data %>%
+  mutate(st_date = as.Date(admission_time, "%y%m%d")) %>%
+  mutate(en_date = as.Date(discharge_time, "%y%m%d")) %>%
+  select(patient_id, st_date, en_date, gender, age) %>%
+  group_by(patient_id) %>%
+  summarise(across(everything(), last))
+
+patients_over_time_df <- as.data.frame(ddply(patients_over_time, .(patient_id), summarise, date = seq(as.Date(st_date), as.Date(en_date), by = "day"), gender = gender, age = age))
+
+patients_over_time_plot_data <- patients_over_time_df %>%
+  group_by(date, gender) %>%
+  summarise(count = n())
+
+patients_over_time_plot <- ggplot(patients_over_time_plot_data, aes(x=date, y = count, colour = gender)) + 
+  geom_line() +
+  theme_classic()
+
+ggplotly(patients_over_time_plot)
+```
+
+### Średni wiek w czasie
+
+Poniżej przedstawiono jak zmieniała się średnia wieku mężczyzn i kobiet w kolejnych dniach badań. 
+
+```{r age_over_time, warning=FALSE, echo=FALSE, message=FALSE}
+age_over_time_plot_data <- patients_over_time_df %>%
+  group_by(date, gender) %>%
+  summarise(age_mean = mean(age), count = n())
+
+age_over_time_plot <- ggplot(age_over_time_plot_data, aes(x=date, y = age_mean, colour = gender, group = 1,
+  text = paste("count:", count))) + 
+  geom_line() +
+  theme_classic()
+
+ggplotly(age_over_time_plot)
+```
+
+### Korelacje między zmiennymi
+
+Poniżej zwizualizowano korelacje atrybutów o wartości > 0,9.
+
+```{r correlation, warning=FALSE, echo=FALSE, message=FALSE}
+any_over_90 <- function(x) any(x > .9, na.rm = TRUE)
+cor_df <- df[-(1:8)]
+x <- cor_df %>%
+  correlate() %>%
+  focus_if(any_over_90, mirror = TRUE)
+
+d <- rplot(x) + theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1))
+ggplotly(d)
+```
+
+### Przygotowanie danych do klasyfikacji
+
+```{r classification_preparation, echo=FALSE, warning=FALSE, message=FALSE}
+classification_data <- df_1 %>%
+  group_by(patient_id) %>%
+  summarise(across(everything(), first)) %>%
+  mutate(gender =  ifelse(gender == "female", 2, 1)) %>%
+  select(-c("patient_id", "re_date", "admission_time", "discharge_time", "stay")) %>%
+  mutate(outcome = if_else(outcome == 0, "lived", "died")) %>%
+  mutate_all(~if_else(is.na(.), median(., na.rm = TRUE), .))
+
+classification_data$outcome <- as.factor(classification_data$outcome)
+
+inTraining <- createDataPartition(y = classification_data$outcome, p = .75, list = FALSE)
+
+training <- classification_data[inTraining, ]
+testing  <- classification_data[-inTraining, ]
+```
+
+
+### Stworzenie modelu
+
+```{r classification_model, warning=FALSE, message=FALSE}
+tune_grid <- expand.grid(mtry = 1:30)
+
+gridCtrl <- trainControl(
+    method = "repeatedcv",
+    summaryFunction = twoClassSummary,
+    classProbs = TRUE,
+    number = 5,
+    repeats = 10)
+
+fitTune <- train(outcome ~ .,
+             data = training,
+             method = "rf",
+             metric = "ROC",
+             preProc = c("center", "scale"),
+             trControl = gridCtrl,
+             tuneGrid = tune_grid,
+             ntree = 30)
+
+classes <- predict(fitTune, newdata = testing)
+```
+
+### Wizualizacja wyników klasyfikacji
+
+```{r _classificationvisualisation, message=FALSE}
+ggplot(fitTune) + theme_bw()
+
+confusionMatrix(data = classes, testing$outcome)
+
+varImp(fitTune, scale=FALSE)
+```
+
