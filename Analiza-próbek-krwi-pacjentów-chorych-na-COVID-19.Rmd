@@ -326,9 +326,11 @@ d <- rplot(x) + theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=
 ggplotly(d)
 ```
 
+## Klasyfikacja
+
 ### Przygotowanie danych do klasyfikacji
 
-```{r classification_preparation, echo=FALSE, warning=FALSE, message=FALSE}
+```{r classification_preparation, warning=FALSE, message=FALSE}
 classification_data <- df_1 %>%
   group_by(patient_id) %>%
   summarise(across(everything(), first)) %>%
