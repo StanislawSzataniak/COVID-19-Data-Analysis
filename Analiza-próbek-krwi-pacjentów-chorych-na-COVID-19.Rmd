@@ -232,7 +232,7 @@ Wybrane atrybuty to:
 - glukoza
 - liczba neutrofili
 
-Na wykresach można zaobserwować, że wysoka wartość tych biomarkerów wiązała się z wyższą śmiertelnością. 
+Z wykresów można zaobserwować, że tylko liczba neutrofili zauważalnie wiązała się z wyższą śmiertelnością. 
 
 ```{r mortality_by_hemoglobin, warning=FALSE, echo=FALSE, message=FALSE}
 mortality_by_hemoglobin_plot <-ggplot(plot_data, aes(x=hemoglobin, fill = gender)) + 
@@ -296,7 +296,7 @@ ggplotly(patients_over_time_plot)
 
 ### Średni wiek w czasie
 
-Poniżej przedstawiono jak zmieniała się średnia wieku mężczyzn i kobiet w kolejnych dniach badań. 
+Poniżej przedstawiono jak zmieniała się średnia wieku mężczyzn i kobiet w kolejnych dniach badań.
 
 ```{r age_over_time, warning=FALSE, echo=FALSE, message=FALSE}
 age_over_time_plot_data <- patients_over_time_df %>%
@@ -313,7 +313,7 @@ ggplotly(age_over_time_plot)
 
 ### Korelacje między zmiennymi
 
-Poniżej zwizualizowano korelacje atrybutów o wartości > 0,9.
+Poniżej zwizualizowano korelacje atrybutów o wartości > 0,9. Do obliczenia zależności pomiędzy zmiennymi został wykorzystany współczynnik korelacji Pearsona.
 
 ```{r correlation, warning=FALSE, echo=FALSE, message=FALSE}
 any_over_90 <- function(x) any(x > .9, na.rm = TRUE)
@@ -327,6 +327,15 @@ ggplotly(d)
 ```
 
 ## Klasyfikacja
+
+Do klasyfikacji wykorzystano wszystkie zmienne liczbowe, a także płeć, którą ponownie sprowadzono do postaci liczbowej. W odróżnieniu od wcześniejszej analizy, do klasyfikacji użyto najwcześniej zarejestrowanych pomiarów. Do uczenia modelu wykorzystano metodę random forest. Ostatecznie klasyfikator osiągnął precyzję na poziomie 87%, a najistotniejszymi zmiennymi w klasyfikacji okazały się m.in.:
+
+- wiek
+- % neutrofili
+- liczba neutrofili
+- % limfocytów
+
+Dokładniejsze informacje przedstawiono w sekcjach poniżej. 
 
 ### Przygotowanie danych do klasyfikacji
 
