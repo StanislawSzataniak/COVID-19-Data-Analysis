@@ -16,6 +16,7 @@ Poniżej zostały przedstawione główne punkty raportu:
 2. [Przygotowanie danych](#przygotowanie-danych)
 3. [Przegląd danych](#przegląd-danych)
 4. [Klasyfikacja](#klasyfikacja)
+5. [Dodatkowe badania](#dodatkowe-badania)
 
 ## Przygotowanie środowiska
 
@@ -347,11 +348,8 @@ classification_data <- df_1 %>%
   select(-c("patient_id", "re_date", "admission_time", "discharge_time", "stay")) %>%
   mutate(outcome = if_else(outcome == 0, "lived", "died")) %>%
   mutate_all(~if_else(is.na(.), median(., na.rm = TRUE), .))
-
 classification_data$outcome <- as.factor(classification_data$outcome)
-
 inTraining <- createDataPartition(y = classification_data$outcome, p = .75, list = FALSE)
-
 training <- classification_data[inTraining, ]
 testing  <- classification_data[-inTraining, ]
 ```
@@ -361,14 +359,12 @@ testing  <- classification_data[-inTraining, ]
 
 ```{r classification_model, warning=FALSE, message=FALSE}
 tune_grid <- expand.grid(mtry = 1:30)
-
 gridCtrl <- trainControl(
     method = "repeatedcv",
     summaryFunction = twoClassSummary,
     classProbs = TRUE,
     number = 5,
     repeats = 10)
-
 fitTune <- train(outcome ~ .,
              data = training,
              method = "rf",
@@ -377,7 +373,6 @@ fitTune <- train(outcome ~ .,
              trControl = gridCtrl,
              tuneGrid = tune_grid,
              ntree = 30)
-
 classes <- predict(fitTune, newdata = testing)
 ```
 
@@ -385,9 +380,46 @@ classes <- predict(fitTune, newdata = testing)
 
 ```{r _classificationvisualisation, message=FALSE}
 ggplot(fitTune) + theme_bw()
-
 confusionMatrix(data = classes, testing$outcome)
-
 varImp(fitTune, scale=FALSE)
 ```
 
+## Dodatkowe badania
+
+Obserwacje zawarte w tym rozdziale zostały dodane po oddaniu projektu. 
+
+Po zauważeniu nagłówka artykułu na temat wpływu stężenia interleukiny 8 na ciężkość zachorowań postanowiłem sprawdzić, czy zauważalne są jakiekolwiek zależności między śmiertelnością i czasem pobytu a poziomem interleukiny 8 (te dwa atrybuty wydają się w pewnym stopniu odzwierciedlać ciężkość choroby). Poziom interleukiny 8 nie był zbyt często badany, jednak z istniejących danych udało się znaleźć potwierdzenie dla tezy przedstawionej w artykule. 
+
+### Śmiertelność ze względu na poziom interleukiny 8
+
+Z wykresu poniżej można zauważyć, że dla poziomu interleukiny 8 większego od 15 liczba zmarłych osób jest taka sama lub większa od liczby osób, które przeżyły chorobę (średni poziom interleukiny 8 w normie to ok. 16pg/ml - taką wartość udało mi się oszacować po przeczytaniu kilku artykułów).
+
+``` {r mortality_by_interleukin_8, warning=FALSE, echo=FALSE, message=FALSE}
+plot_data <- df %>%
+  select(patient_id, gender, age, admission_time, discharge_time, discharged, stay, interleukin_8) %>%
+  group_by(patient_id) %>%
+  summarise(across(everything(), first))
+
+mortality_by_interleukin_8 <- ggplot(plot_data %>% filter(interleukin_8 < 100), aes(x = interleukin_8, fill = discharged)) + 
+  geom_histogram(color="black", binwidth = 5, alpha = 0.8, position = "identity") +
+  theme_classic()
+ggplotly(mortality_by_interleukin_8)
+```
+
+### Długość pobytu ze względu na średni poziom interleukiny 8
+
+Na wykresie poniżej przedstawiona jest zależność między długością pobytu a średnim poziomem interleukiny 8. Można zauważyć, że dla wysokiego stężenia tego biomarkera pobyt był bardzo krótki (co prawdopodobnie oznaczało śmierć pacjenta) lub bardzo długi (co wiąże się z ciężkimi objawami choroby).
+
+``` {r stay_by_interleukin_8, warning=FALSE, echo=FALSE, message=FALSE}
+stay_by_interleukin_8 <- plot_data %>%
+  mutate(stay_group = cut(stay, seq(min(stay), max(stay), 3))) %>%
+  filter(interleukin_8 < 100) %>%
+  group_by(stay_group) %>%
+  summarise(avg_interleukin = mean(interleukin_8, na.rm = TRUE))
+
+stay_by_interleukin_8_plot <- ggplot(stay_by_interleukin_8, aes(x=stay_group, y = avg_interleukin, group = 1)) + 
+  geom_line() +
+  theme_classic()
+
+ggplotly(stay_by_interleukin_8_plot)
+```
